@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Teachable Machine Pose Model 이지민</title>
+    <style>
+        body {
+            font-family: 'Malgun Gothic', sans-serif;
+            text-align: center;
+            background-color: #f5f6fa;
+            padding: 20px;
+        }
+        h2 { color: #2c3e50; }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+            margin-bottom: 20px;
+        }
+        button:hover { background-color: #2980b9; }
+        #canvas-container {
+            position: relative;
+            display: inline-block;
+            border: 4px solid #bdc3c7;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+        }
+        /* 특정 포즈가 감지되었을 때 테두리 색을 바꾸기 위한 클래스 */
+        .detected {
+            border-color: #2ecc71 !important; /* 초록색 감지 효과 */
+            box-shadow: 0 0 15px #2ecc71;
+        }
+        #label-container {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        .pose-badge {
+            width: 300px;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            font-size: 18px;
+            font-weight: bold;
+            color: #7f8c8d;
+            display: flex;
+            justify-content: space-between;
+            transition: all 0.2s;
+        }
+        /* 임계값을 넘은 활성화된 포즈 */
+        .pose-badge.active {
+            background: #2ecc71;
+            color: white;
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Teachable Machine Pose Model 이지민</h2>
+    <button type="button" onclick="init()">시작하기 (Start)</button>
+    
+    <div>
+        <div id="canvas-container">
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+    
+    <div id="label-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+    <script type="text/javascript">
+        
+        const URL = "https://teachablemachine.withgoogle.com/models/nVMuR82fW/";
+        let model, webcam, ctx, labelContainer, maxPredictions;
+        let canvasContainer;
+
+        // 🔥 [임계값 설정] 0.85 = 85% 이상 일치할 때만 올바른 포즈로 인정
+        const DETECTION_THRESHOLD = 0.85; 
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            model = await tmPose.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            const size = 300;
+            const flip = true; 
+            webcam = new tmPose.Webcam(size, size, flip); 
+            await webcam.setup(); 
+            await webcam.play();
+            window.requestAnimationFrame(loop);
+
+            // DOM 요소 세팅
+            const canvas = document.getElementById("canvas");
+            canvas.width = size; canvas.height = size;
+            ctx = canvas.getContext("2d");
+            
+            canvasContainer = document.getElementById("canvas-container");
+            labelContainer = document.getElementById("label-container");
+            labelContainer.innerHTML = ""; // 초기화
+
+            // 결과창 레이아웃 구조 개선 (레이블명과 퍼센트를 분리해서 표기하기 위함)
+            for (let i = 0; i < maxPredictions; i++) { 
+                const badge = document.createElement("div");
+                badge.className = "pose-badge";
+                badge.innerHTML = `<span class="pose-name"></span><span class="pose-prob"></span>`;
+                labelContainer.appendChild(badge);
+            }
+        }
+
+        async function loop(timestamp) {
+            webcam.update(); 
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+            const prediction = await model.predict(posenetOutput);
+
+            let anyPoseDetected = false;
+
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = prediction[i].className;
+                const probability = prediction[i].probability; // 0.0 ~ 1.0 사이 값
+                
+                const badge = labelContainer.childNodes[i];
+                const nameSpan = badge.querySelector(".pose-name");
+                const probSpan = badge.querySelector(".pose-prob");
+
+                // 텍스트 업데이트
+                nameSpan.innerText = className;
+                probSpan.innerText = (probability * 100).toFixed(0) + "%";
+
+                // 🔥 [핵심 변화] 임계값 검사 및 특정 '배경/기본' 클래스 제외 처리
+                // 배경이나 아무것도 안 한 상태를 'Background' 혹은 '기본'으로 정의했다면 조건문에서 걸러줄 수 있습니다.
+                if (probability >= DETECTION_THRESHOLD && className !== "Background" && className !== "기본") {
+                    badge.classList.add("active");
+                    anyPoseDetected = true; // 기준치를 넘은 포즈가 존재함
+                } else {
+                    badge.classList.remove("active");
+                }
+            }
+
+            // 포즈가 정확하게 감지되면 카메라 화면 테두리를 초록색으로 하이라이트
+            if (anyPoseDetected) {
+                canvasContainer.classList.add("detected");
+            } else {
+                canvasContainer.classList.remove("detected");
+            }
+
+            drawPose(pose);
+        }
+
+        function drawPose(pose) {
+            if (webcam.canvas) {
+                ctx.drawImage(webcam.canvas, 0, 0);
+                if (pose) {
+                    const minPartConfidence = 0.5;
+                    tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
+                    tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
